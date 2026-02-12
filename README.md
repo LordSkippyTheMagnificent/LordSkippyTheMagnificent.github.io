@@ -16,4 +16,5 @@ A lightweight, web-based, turn-based tactics prototype themed around the Battle 
 Just open `index.html` in your browser.
 
 ## Run online
-Just open [(https://lordskippythemagnificent.github.io/)]
+Just open https://lordskippythemagnificent.github.io
+
