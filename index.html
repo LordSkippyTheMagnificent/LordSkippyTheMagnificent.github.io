@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Gettysburg Mini Tactics</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="title">
+        <h1>Gettysburg Mini Tactics</h1>
+        <p class="subtitle">Turn-based grid skirmish (Union vs Confederacy)</p>
+      </div>
+
+      <div class="status">
+        <div><span class="label">Mode:</span> <span id="modeLabel">Two Player</span></div>
+        <div><span class="label">Campaign:</span> <span id="campaignLabel">Off</span></div>
+        <div><span class="label">Turn:</span> <span id="turnSide">Union</span></div>
+        <div><span class="label">Phase:</span> <span id="turnPhase">Move</span></div>
+        <div><span class="label">Selected:</span> <span id="selectedInfo">None</span></div>
+      </div>
+
+      <div class="controls">
+        <button id="btnEndTurn" type="button">End Turn</button>
+        <button id="btnReset" type="button">Reset</button>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="boardPanel">
+        <div class="modeBar">
+          <label class="modePick">
+            <span>Game Mode</span>
+            <select id="modeSelect">
+              <option value="pvp">Two Player (Human vs Human)</option>
+              <option value="pve">Single Player (Human vs AI)</option>
+            </select>
+          </label>
+
+          <label class="modePick" id="difficultyWrap">
+            <span>AI Difficulty</span>
+            <input id="difficulty" type="range" min="1" max="4" step="1" value="2" />
+            <div class="diffLabel" id="difficultyLabel">Normal</div>
+          </label>
+
+          <div class="campaignControls">
+            <button id="btnCampaign" type="button">Start Campaign</button>
+            <div class="battleName" id="battleName">Skirmish</div>
+          </div>
+
+          <div class="aiNote" id="aiNote">
+            In Single Player, the AI controls Confederacy.
+          </div>
+        </div>
+
+        <div id="board" class="board" aria-label="battle grid"></div>
+        <div class="legend">
+          <div class="pill union">Union</div>
+          <div class="pill confed">Confederacy</div>
+          <div class="pill hill">High Ground (Little Round Top)</div>
+        </div>
+      </section>
+
+      <aside class="sidePanel">
+        <h2>Event Cards</h2>
+
+        <div class="eventControls">
+          <button id="btnDrawEvent" type="button">Draw Event</button>
+          <button id="btnPlayEvent" type="button" disabled>Play Selected</button>
+        </div>
+
+        <div class="eventHint" id="eventHint">
+          Draw a card at the start of your turn, then select it to play.
+        </div>
+
+        <div class="eventArea">
+          <div class="eventList" id="eventHand" aria-label="event hand"></div>
+          <div class="eventActive" id="eventActive" aria-label="active effects"></div>
+        </div>
+
+        <h2>How to play</h2>
+        <ol>
+          <li>Click one of your units to select.</li>
+          <li><b>Move phase:</b> click a highlighted square to move.</li>
+          <li><b>Attack phase:</b> click a highlighted enemy to attack.</li>
+          <li>End Turn to switch sides.</li>
+        </ol>
+
+        <h2>Rules (simple)</h2>
+        <ul>
+          <li>Each unit can <b>move once</b> and <b>attack once</b> per turn.</li>
+          <li>High ground gives <b>+1 attack</b> and <b>+1 defense</b>.</li>
+          <li>Win by eliminating all enemy units.</li>
+        </ul>
+
+        <div id="log" class="log" aria-label="game log"></div>
+      </aside>
+    </main>
+
+    <script src="game.js"></script>
+  </body>
+</html>
