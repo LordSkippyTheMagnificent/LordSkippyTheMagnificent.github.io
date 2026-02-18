@@ -49,12 +49,11 @@
             <div class="battleName" id="battleName">Skirmish</div>
           </div>
 
-          <div class="aiNote" id="aiNote">
-            In Single Player, the AI controls Confederacy.
-          </div>
+          <div class="aiNote" id="aiNote">In Single Player, the AI controls Confederacy.</div>
         </div>
 
         <div id="board" class="board" aria-label="battle grid"></div>
+
         <div class="legend">
           <div class="pill union">Union</div>
           <div class="pill confed">Confederacy</div>
@@ -91,13 +90,54 @@
         <ul>
           <li>Each unit can <b>move once</b> and <b>attack once</b> per turn.</li>
           <li>High ground gives <b>+1 attack</b> and <b>+1 defense</b>.</li>
-          <li>Win by eliminating all enemy units.</li>
+          <li>Win by eliminating all enemy units (Campaign has special objectives).</li>
         </ul>
 
         <div id="log" class="log" aria-label="game log"></div>
       </aside>
     </main>
 
+    <!-- Command Phase Overlay -->
+    <div id="commandOverlay" class="commandOverlay hidden">
+      <div class="commandPanel">
+        <div class="commandHeader">
+          <h2>Between-Battle Command Phase</h2>
+          <div id="cpDisplay" class="cpDisplay"></div>
+        </div>
+
+        <div class="commandGrid">
+          <div class="commandLeft">
+            <h3>Upgrades</h3>
+            <div class="commandOptions">
+              <button data-upgrade="heal">
+                Heal All Units <span class="cost" id="cost-heal"></span>
+              </button>
+              <button data-upgrade="reinforce">
+                Add Infantry <span class="cost" id="cost-reinforce"></span>
+              </button>
+              <button data-upgrade="artillery">
+                Upgrade Artillery (+1 Range) <span class="cost" id="cost-artillery"></span>
+              </button>
+              <button data-upgrade="morale">
+                Inspire Troops (+1 ATK next battle) <span class="cost" id="cost-morale"></span>
+              </button>
+            </div>
+
+            <div class="commandNote" id="commandNote"></div>
+
+            <button id="btnNextBattle" class="nextBattleBtn">Proceed to Next Battle</button>
+          </div>
+
+          <div class="commandRight">
+            <h3>Union Roster Preview</h3>
+            <div id="rosterPreview" class="rosterPreview"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <script src="game.js"></script>
   </body>
 </html>
+
+
