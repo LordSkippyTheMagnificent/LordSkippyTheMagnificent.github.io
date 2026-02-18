@@ -1,14 +1,15 @@
-// Gettysburg Mini Tactics (vanilla JS)
+ // Gettysburg Mini Tactics (vanilla JS)
 // Features:
 // - PvP or PvE (AI controls Confederacy)
 // - Difficulty slider: 1 Easy, 2 Normal, 3 Hard, 4 Robert Mode (Lee)
 // - Event cards
 // - Campaign mode: 3 battles with Union survivors carrying over (+1 HP between battles)
 // - Animations: move pop, hit flash, damage float
+// - Between-battle Command Phase with scaling costs + roster preview
 
 const SIZE = 8;
 
-// Make HIGH_GROUND mutable so campaign levels can swap it
+// HIGH_GROUND mutable so campaign levels can swap it
 let HIGH_GROUND = new Set([
   key(6, 6), key(7, 6), key(6, 7), key(7, 7), key(5, 6), key(6, 5)
 ]);
@@ -79,7 +80,6 @@ const CAMPAIGN_LEVELS = [
       makeUnit("C7", "Confed", "ART", 1, 4),
       makeUnit("C8", "Confed", "CAV", 0, 1),
     ]),
-    // Union wins by holding the hill for 3 Union turns
     winCondition: { type: "holdHill", side: "Union", turns: 3 },
   },
   {
@@ -94,6 +94,18 @@ const CAMPAIGN_LEVELS = [
     winCondition: { type: "eliminate" },
   },
 ];
+
+// Command Phase: base costs
+const UPGRADE_BASE_COST = {
+  heal: 2,
+  reinforce: 3,
+  artillery: 4,
+  morale: 3,
+};
+function upgradeCost(type) {
+  const uses = state?.campaign?.upgradeUses?.[type] || 0;
+  return (UPGRADE_BASE_COST[type] || 999) + uses; // linear scaling
+}
 
 // --- Game State ---
 let state = null;
@@ -119,35 +131,25 @@ const difficultyLabelEl = document.getElementById("difficultyLabel");
 const difficultyWrapEl = document.getElementById("difficultyWrap");
 
 const btnCampaign = document.getElementById("btnCampaign");
-btnCampaign.addEventListener("click", () => {
-  // Campaign is designed for PvE
-  if (state.mode !== "pve") {
-    state.mode = "pve";
-    modeSelectEl.value = "pve";
-  }
-  startCampaign();
-});
 
-modeSelectEl.addEventListener("change", () => {
-  state.mode = modeSelectEl.value;
-  render();
-  maybeRunAI();
-});
+// Command overlay DOM
+const commandOverlay = document.getElementById("commandOverlay");
+const cpDisplay = document.getElementById("cpDisplay");
+const btnNextBattle = document.getElementById("btnNextBattle");
+const rosterPreviewEl = document.getElementById("rosterPreview");
+const commandNoteEl = document.getElementById("commandNote");
 
-difficultyEl.addEventListener("input", () => {
-  state.difficulty = Number(difficultyEl.value);
-  difficultyLabelEl.textContent = diffName(state.difficulty);
-  render();
-});
+const costHealEl = document.getElementById("cost-heal");
+const costReinforceEl = document.getElementById("cost-reinforce");
+const costArtilleryEl = document.getElementById("cost-artillery");
+const costMoraleEl = document.getElementById("cost-morale");
 
+// Event UI DOM
 const btnDrawEvent = document.getElementById("btnDrawEvent");
 const btnPlayEvent = document.getElementById("btnPlayEvent");
 const eventHandEl = document.getElementById("eventHand");
 const eventActiveEl = document.getElementById("eventActive");
 const eventHintEl = document.getElementById("eventHint");
-
-btnDrawEvent.addEventListener("click", drawEventCard);
-btnPlayEvent.addEventListener("click", playSelectedEvent);
 
 // --- Helpers ---
 function key(r, c) { return `${r},${c}`; }
@@ -222,16 +224,19 @@ function reset() {
     campaign: {
       active: false,
       levelIndex: 0,
-      roster: null,       // Union survivors (copied)
-      hillHoldCount: 0,   // used for holdHill
+      roster: null,
+      hillHoldCount: 0,
+      commandPoints: 0,
+      upgradeUses: { heal: 0, reinforce: 0, artillery: 0, morale: 0 },
     },
   };
 
-  // Default skirmish setup
+  // Default skirmish hills
   HIGH_GROUND = new Set([
     key(6, 6), key(7, 6), key(6, 7), key(7, 7), key(5, 6), key(6, 5)
   ]);
 
+  // Default skirmish units
   state.units = [
     makeUnit("U1", "Union", "INF", 7, 1),
     makeUnit("U2", "Union", "INF", 7, 3),
@@ -247,6 +252,8 @@ function reset() {
   state.acted = {};
   for (const u of state.units) state.acted[u.id] = { moved: false, attacked: false };
 
+  // UI
+  closeCommandPhase();
   logEl.innerHTML = "";
   log("New game started. Union to move.");
   log("Mode: " + (state.mode === "pve" ? "Single Player (Human vs AI)" : "Two Player (Human vs Human)"));
@@ -275,6 +282,9 @@ function startCampaign() {
   state.campaign.roster = null;
   state.campaign.hillHoldCount = 0;
 
+  state.campaign.commandPoints = 0;
+  state.campaign.upgradeUses = { heal: 0, reinforce: 0, artillery: 0, morale: 0 };
+
   log("=== CAMPAIGN START ===");
   loadCampaignLevel(0);
 }
@@ -294,14 +304,13 @@ function loadCampaignLevel(i) {
 
   state.campaign.hillHoldCount = 0;
 
-  // Base units for the level
   let units = lvl.setup();
 
   // Carry-over roster replaces Union units when available
   if (state.campaign.roster) {
     units = units.filter(u => u.side !== "Union").concat(state.campaign.roster.map(u => ({ ...u })));
 
-    // Between-battle heal (Union +1 HP, capped)
+    // Between-battle heal (Union +1 HP capped)
     for (const u of units) {
       if (u.side === "Union") {
         const maxHp = UNIT_TYPES[u.typeKey].hp;
@@ -310,6 +319,7 @@ function loadCampaignLevel(i) {
     }
   }
 
+  // Ensure acted map exists for all units
   state.units = units;
   state.acted = {};
   for (const u of state.units) state.acted[u.id] = { moved: false, attacked: false };
@@ -327,7 +337,6 @@ function handleBattleEnd(winner) {
     return;
   }
 
-  // Campaign assumes player is Union
   if (winner !== "Union") {
     log(`CAMPAIGN FAILED on ${CAMPAIGN_LEVELS[state.campaign.levelIndex].name}.`);
     state.campaign.active = false;
@@ -342,7 +351,14 @@ function handleBattleEnd(winner) {
 
   state.campaign.roster = survivors;
 
-  // Next level
+  // Award Command Points (base + survivors bonus)
+  const baseCP = 3;
+  const survivorBonus = survivors.length;
+  const gain = baseCP + survivorBonus;
+  state.campaign.commandPoints += gain;
+  log(`Union gains ${gain} Command Points (base ${baseCP} + survivors ${survivorBonus}).`);
+
+  // Next level?
   const next = state.campaign.levelIndex + 1;
   if (next >= CAMPAIGN_LEVELS.length) {
     log("=== CAMPAIGN COMPLETE: Union Victory at Gettysburg! ===");
@@ -352,14 +368,16 @@ function handleBattleEnd(winner) {
   }
 
   state.campaign.levelIndex = next;
-  loadCampaignLevel(next);
+
+  // Open command phase instead of immediately loading next battle
+  openCommandPhase();
 }
 
 function checkWinCondition() {
   const unionAlive = state.units.some(u => u.side === "Union");
   const confedAlive = state.units.some(u => u.side === "Confed");
 
-  // elimination always ends the battle
+  // elimination ends battle always
   if (!unionAlive || !confedAlive) {
     return { over: true, winner: unionAlive ? "Union" : "Confed" };
   }
@@ -370,8 +388,6 @@ function checkWinCondition() {
   const wc = lvl.winCondition;
 
   if (wc.type === "holdHill") {
-    // We count Union turns completed where Union holds at least one hill tile.
-    // Incremented in endTurn() when Union finishes their turn.
     if (state.campaign.hillHoldCount >= wc.turns) {
       return { over: true, winner: wc.side };
     }
@@ -392,7 +408,7 @@ function getUnit(id) {
 function makeReinforcementId(side) {
   const prefix = side === "Union" ? "U" : "C";
   let n = 1;
-  const existing = new Set(state.units.map(u => u.id));
+  const existing = new Set(state.units.map(u => u.id).concat((state.campaign.roster || []).map(u => u.id)));
   while (existing.has(`${prefix}R${n}`)) n++;
   return `${prefix}R${n}`;
 }
@@ -445,11 +461,115 @@ function playSelectedEvent() {
   render();
 }
 
+// --- Command Phase ---
+function openCommandPhase() {
+  commandOverlay.classList.remove("hidden");
+  commandNoteEl.textContent = "";
+  refreshCommandUI();
+}
+
+function closeCommandPhase() {
+  commandOverlay.classList.add("hidden");
+}
+
+function refreshCommandUI() {
+  cpDisplay.textContent = `CP: ${state.campaign.commandPoints}`;
+
+  costHealEl.textContent = `(${upgradeCost("heal")} CP)`;
+  costReinforceEl.textContent = `(${upgradeCost("reinforce")} CP)`;
+  costArtilleryEl.textContent = `(${upgradeCost("artillery")} CP)`;
+  costMoraleEl.textContent = `(${upgradeCost("morale")} CP)`;
+
+  renderRosterPreview();
+}
+
+function renderRosterPreview() {
+  const roster = state.campaign.roster || [];
+  rosterPreviewEl.innerHTML = "";
+
+  if (roster.length === 0) {
+    rosterPreviewEl.textContent = "No survivors in roster.";
+    return;
+  }
+
+  for (const u of roster) {
+    const maxHp = UNIT_TYPES[u.typeKey].hp;
+
+    const row = document.createElement("div");
+    row.className = "rosterRow";
+
+    const left = document.createElement("div");
+    left.innerHTML = `
+      <div class="rosterId">${u.id} <span class="badgeTiny">${u.symbol}</span></div>
+      <div class="rosterMeta">${u.name}</div>
+    `;
+
+    const right = document.createElement("div");
+    right.className = "rosterStats";
+    right.innerHTML = `
+      HP ${u.hp}/${maxHp}<br/>
+      ATK ${u.atk} • DEF ${u.def}<br/>
+      MOV ${u.move} • RNG ${u.range}
+    `;
+
+    row.appendChild(left);
+    row.appendChild(right);
+    rosterPreviewEl.appendChild(row);
+  }
+}
+
+function spendCommandPoints(type) {
+  const roster = state.campaign.roster;
+  if (!state.campaign.active || !roster) return;
+
+  const cost = upgradeCost(type);
+  if (state.campaign.commandPoints < cost) {
+    commandNoteEl.textContent = `Not enough CP. Need ${cost}.`;
+    return;
+  }
+
+  // Spend CP + record use (for scaling)
+  state.campaign.commandPoints -= cost;
+  state.campaign.upgradeUses[type] = (state.campaign.upgradeUses[type] || 0) + 1;
+
+  if (type === "heal") {
+    roster.forEach(u => {
+      const maxHp = UNIT_TYPES[u.typeKey].hp;
+      u.hp = maxHp;
+    });
+    commandNoteEl.textContent = `Healed all units. Cost ${cost} CP.`;
+  }
+
+  else if (type === "reinforce") {
+    const id = makeReinforcementId("Union");
+    // r/c here are placeholders; units will appear via roster on next load
+    roster.push(makeUnit(id, "Union", "INF", 7, 4));
+    commandNoteEl.textContent = `Added Infantry (${id}). Cost ${cost} CP.`;
+  }
+
+  else if (type === "artillery") {
+    let upgraded = 0;
+    roster.forEach(u => {
+      if (u.typeKey === "ART") { u.range += 1; upgraded++; }
+    });
+    commandNoteEl.textContent = upgraded
+      ? `Upgraded ${upgraded} artillery unit(s). Cost ${cost} CP.`
+      : `No artillery to upgrade (still cost ${cost} CP).`;
+  }
+
+  else if (type === "morale") {
+    roster.forEach(u => { u.atk += 1; });
+    commandNoteEl.textContent = `Inspired troops (+1 ATK). Cost ${cost} CP.`;
+  }
+
+  refreshCommandUI();
+}
+
 // --- Turn / Phase ---
 function endTurn() {
   if (isGameOverRaw()) return;
 
-  // If campaign + holdHill: when Union ends their turn, check if Union holds hill.
+  // Campaign holdHill: when Union ends their turn, check if Union holds hill
   if (state.campaign.active) {
     const lvl = CAMPAIGN_LEVELS[state.campaign.levelIndex];
     if (lvl.winCondition.type === "holdHill" && state.turnSide === "Union") {
@@ -458,8 +578,6 @@ function endTurn() {
         state.campaign.hillHoldCount += 1;
         log(`Union holds the hill (${state.campaign.hillHoldCount}/${lvl.winCondition.turns}).`);
       } else {
-        // Optional: you can reset the count if they lose the hill
-        // state.campaign.hillHoldCount = 0;
         log("Union does not hold the hill this turn.");
       }
     }
@@ -519,7 +637,7 @@ function computeAttackTargets(unit) {
   return targets;
 }
 
-// --- Combat (returns animation info; caller renders + animates) ---
+// --- Combat (returns animation info) ---
 function resolveAttack(attacker, defender) {
   const atkHill = isHill(attacker.r, attacker.c) ? 1 : 0;
   const defHill = isHill(defender.r, defender.c) ? 1 : 0;
@@ -542,14 +660,12 @@ function resolveAttack(attacker, defender) {
     `${sideMod ? ` [Event ATK mod ${sideMod}]` : ""}`
   );
 
-  let eliminated = false;
   if (defender.hp <= 0) {
-    eliminated = true;
     log(`${defender.side} ${defender.symbol} (${defender.id}) is eliminated.`);
     state.units = state.units.filter(u => u.id !== defender.id);
   }
 
-  return { attackerPos, defenderPos, dmg, eliminated };
+  return { attackerPos, defenderPos, dmg };
 }
 
 function isGameOverRaw() {
@@ -558,17 +674,15 @@ function isGameOverRaw() {
   return !unionAlive || !confedAlive;
 }
 
-// --- Click Handling ---
+// --- Click Handling (animation-safe: render once, animate after) ---
 function onCellClick(r, c) {
   if (isGameOverRaw()) return;
-
-  // If AI's turn in PvE, ignore human clicks
   if (state.mode === "pve" && state.turnSide === "Confed") return;
 
   const clickedUnit = unitAt(r, c);
   const selected = getUnit(state.selectedUnitId);
 
-  // Select your unit
+  // select your unit
   if (clickedUnit && clickedUnit.side === state.turnSide) {
     state.selectedUnitId = clickedUnit.id;
     state.phase = state.acted[clickedUnit.id].moved ? "Attack" : "Move";
@@ -581,7 +695,7 @@ function onCellClick(r, c) {
 
   const act = state.acted[selected.id];
 
-  // ---- MOVE PHASE ----
+  // MOVE
   if (state.phase === "Move") {
     if (act.moved) {
       state.phase = "Attack";
@@ -591,23 +705,19 @@ function onCellClick(r, c) {
 
     const moves = computeMoveTargets(selected);
     if (moves.some(t => t.r === r && t.c === c)) {
-      // update state
       selected.r = r;
       selected.c = c;
       act.moved = true;
       log(`${selected.side} ${selected.symbol} (${selected.id}) moves to (${r},${c}).`);
 
-      // update phase/selection BEFORE rendering
       advancePhaseIfNeeded();
-
-      // render ONCE, then animate on the new DOM
       render();
       flashUnitAt(r, c, "animMove");
       return;
     }
   }
 
-  // ---- ATTACK PHASE ----
+  // ATTACK
   if (state.phase === "Attack") {
     if (act.attacked) {
       state.selectedUnitId = null;
@@ -622,23 +732,17 @@ function onCellClick(r, c) {
       const info = resolveAttack(selected, clickedUnit);
       act.attacked = true;
 
-      // check win immediately after combat resolves
       const result = checkWinCondition();
       if (result.over) {
-        // render once so you can still see the hit + damage pop briefly if desired
         render();
         flashUnitAt(info.attackerPos.r, info.attackerPos.c, "animMove");
         flashUnitAt(info.defenderPos.r, info.defenderPos.c, "animHit");
         showDamageAt(info.defenderPos.r, info.defenderPos.c, info.dmg);
-
         handleBattleEnd(result.winner);
         return;
       }
 
-      // update phase/selection BEFORE rendering
       advancePhaseIfNeeded();
-
-      // render ONCE, then animate
       render();
       flashUnitAt(info.attackerPos.r, info.attackerPos.c, "animMove");
       flashUnitAt(info.defenderPos.r, info.defenderPos.c, "animHit");
@@ -669,7 +773,6 @@ function aiTakeTurn() {
 
   if (!state.drawnThisTurn) drawEventCard();
 
-  // Robert Mode always plays an event if possible
   if (state.difficulty === 4) aiPlayBestEvent(true);
   else if (!easyRandom || Math.random() < 0.6) aiPlayBestEvent(false);
 
@@ -688,7 +791,7 @@ function aiTakeTurn() {
       continue;
     }
 
-    // Attack first if possible
+    // attack first
     if (!act.attacked) {
       const targets = computeAttackTargets(u);
       if (targets.length > 0) {
@@ -714,20 +817,19 @@ function aiTakeTurn() {
       }
     }
 
-    // Move
+    // move
     if (!act.moved) {
       const move = aiPickBestMove(u, focus);
       if (move) {
         u.r = move.r; u.c = move.c;
         act.moved = true;
         log(`AI moves ${u.symbol} (${u.id}) to (${u.r},${u.c}).`);
-
         render();
         flashUnitAt(u.r, u.c, "animMove");
       }
     }
 
-    // Attack after moving
+    // attack after move
     if (!act.attacked) {
       const targets = computeAttackTargets(u);
       if (targets.length > 0) {
@@ -1007,7 +1109,7 @@ function render() {
     selectedInfoEl.textContent = "None";
   }
 
-  // Board
+  // Board rebuild
   boardEl.innerHTML = "";
   const highlights = getHighlights();
 
@@ -1037,7 +1139,6 @@ function render() {
         hp.textContent = `HP ${u.hp}`;
 
         badges.appendChild(hp);
-
         cell.appendChild(unitEl);
         cell.appendChild(badges);
       }
@@ -1055,9 +1156,7 @@ function getHighlights() {
   const selected = getUnit(state.selectedUnitId);
   if (!selected) return out;
 
-  // If AI's turn, no highlights
   if (state.mode === "pve" && state.turnSide === "Confed") return out;
-
   if (selected.side !== state.turnSide) return out;
 
   const act = state.acted[selected.id];
@@ -1065,11 +1164,9 @@ function getHighlights() {
   if (state.phase === "Move" && !act.moved) {
     for (const t of computeMoveTargets(selected)) out[key(t.r, t.c)] = "move";
   }
-
   if (state.phase === "Attack" && !act.attacked) {
     for (const t of computeAttackTargets(selected)) out[key(t.r, t.c)] = "attack";
   }
-
   return out;
 }
 
@@ -1118,6 +1215,43 @@ function renderEventUI() {
       : "You can draw 1 card per turn.");
 }
 
+// --- UI wiring ---
+btnDrawEvent.addEventListener("click", drawEventCard);
+btnPlayEvent.addEventListener("click", playSelectedEvent);
+
+modeSelectEl.addEventListener("change", () => {
+  state.mode = modeSelectEl.value;
+  render();
+  maybeRunAI();
+});
+
+difficultyEl.addEventListener("input", () => {
+  state.difficulty = Number(difficultyEl.value);
+  difficultyLabelEl.textContent = diffName(state.difficulty);
+  render();
+});
+
+// Campaign button: start/restart campaign; forces PvE
+btnCampaign.addEventListener("click", () => {
+  if (state.mode !== "pve") {
+    state.mode = "pve";
+    modeSelectEl.value = "pve";
+  }
+  startCampaign();
+});
+
+// Command upgrades click handlers
+document.querySelectorAll(".commandOptions button").forEach(btn => {
+  btn.addEventListener("click", () => {
+    const type = btn.dataset.upgrade;
+    spendCommandPoints(type);
+  });
+});
+
+btnNextBattle.addEventListener("click", () => {
+  closeCommandPhase();
+  loadCampaignLevel(state.campaign.levelIndex);
+});
+
 // Boot
 reset();
-
